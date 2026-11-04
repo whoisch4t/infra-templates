@@ -1,0 +1,17 @@
+# Prometheus Operator objects for the app. Needs the CRDs from kube-prometheus-stack
+# (see monitoring/). Overlays opt in with `components: [../../components/monitoring]`.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - servicemonitor.yaml
+  - prometheusrule.yaml
+
+configMapGenerator:
+  - name: app-dashboard
+    files:
+      - app-dashboard.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1" # picked up by the Grafana sidecar

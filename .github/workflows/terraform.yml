@@ -1,0 +1,80 @@
+name: Terraform plan
+
+# Plans only; nothing here can change AWS. Needs two repository variables:
+#   AWS_PLAN_ROLE_ARN  read-only role from terraform/bootstrap (output plan_role_arn)
+#   TF_STATE_BUCKET    state bucket from terraform/bootstrap
+# Without them the job is skipped, so forks and fresh clones stay green.
+# With an INFRACOST_API_KEY secret (free), the plan also gets a monthly cost estimate.
+on:
+  pull_request:
+    paths: ["terraform/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC -> AWS, no long-lived keys
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      TF_IN_AUTOMATION: "true"
+    defaults:
+      run:
+        working-directory: terraform/envs/demo
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+
+      - name: Init
+        run: >-
+          terraform init -input=false
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+          -backend-config="region=${AWS_REGION}"
+
+      # -lock=false: the plan role can read state but not write the lock file.
+      - name: Plan
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+          terraform show -json tfplan > plan.json
+          {
+            echo '### Terraform plan'
+            echo '```'
+            tail -n 40 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cost estimate
+        if: env.INFRACOST_API_KEY != ''
+        uses: infracost/actions/setup@v5
+      - if: env.INFRACOST_API_KEY != ''
+        run: |
+          infracost breakdown --path plan.json --format table --out-file cost.txt
+          {
+            echo '### Monthly cost estimate (Infracost)'
+            echo '```'
+            cat cost.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: terraform-plan
+          path: |
+            terraform/envs/demo/plan.txt
+            terraform/envs/demo/cost.txt
+          if-no-files-found: ignore

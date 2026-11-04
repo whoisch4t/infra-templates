@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (git-ignored).
+region        = "us-east-1"
+compute       = "ec2" # ec2 | fargate | none
+image_tag     = "1.0.0"
+allowed_cidrs = [] # e.g. ["203.0.113.7/32"] to reach it from your IP

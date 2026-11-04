@@ -1,0 +1,22 @@
+# Accepted Trivy findings. Each one is a cost or design trade-off, with the reason next to it.
+# Anything not listed here fails CI.
+misconfigurations:
+  - id: AWS-0104
+    paths: ["terraform/modules/**"]
+    statement: >-
+      Egress to 0.0.0.0/0 is limited to port 443, for ECR, SSM and CloudWatch. Restricting it
+      further needs VPC interface endpoints (~$7/month each), which defeats the free-tier setup.
+  - id: AWS-0132
+    paths: ["terraform/bootstrap/**"]
+    statement: >-
+      The state bucket uses SSE-S3 (AES256). A customer managed KMS key costs $1/month plus
+      requests and adds nothing here: access is already limited by IAM and a TLS-only bucket policy.
+  - id: KSV-0013
+    paths: ["k8s/base/**"]
+    statement: >-
+      The base has no tag on purpose; every overlay pins one. CI also scans the rendered overlays,
+      where this check stays on.
+  - id: KSV-0125
+    statement: >-
+      Images come from ghcr.io/whoisch4t only. Registry allow-listing belongs in an admission
+      policy on the cluster, not in Trivy's default list.

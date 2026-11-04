@@ -1,0 +1,49 @@
+# Dev: one small replica, fault endpoint on (to test the alert), no PodDisruptionBudget.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: app-dev
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+components:
+  - ../../components/monitoring
+
+images:
+  - name: ghcr.io/whoisch4t/infra-templates-app
+    newTag: dev # CI replaces this with the image it just built
+
+configMapGenerator:
+  - name: app-config
+    behavior: merge
+    literals:
+      - FAULTS_ENABLED=true
+      - SHUTDOWN_DELAY=2s
+
+patches:
+  - target:
+      kind: Deployment
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
+  # With one replica a PDB would block node drains, so dev has none.
+  - patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: app

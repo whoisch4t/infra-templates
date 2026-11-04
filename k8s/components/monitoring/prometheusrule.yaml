@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: app
+spec:
+  groups:
+    - name: app.rules
+      rules:
+        - alert: AppHighErrorRate
+          # More than 5% of requests failing with 5xx, over 5 minutes, for 5 minutes in a row.
+          expr: |
+            sum by (namespace) (rate(http_requests_total{job="app", code=~"5.."}[5m]))
+              /
+            sum by (namespace) (rate(http_requests_total{job="app"}[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "app in {{ $labels.namespace }} is failing {{ $value | humanizePercentage }} of requests"
+            description: "More than 5% of requests return 5xx. Check the last deploy first; roll back if it lines up."
+            runbook_url: "https://github.com/whoisch4t/infra-templates#rollback"
+
+        - alert: AppDown
+          # Every pod of the app is failing its scrape (or none is running).
+          expr: sum by (namespace) (up{job="app"}) == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "app in {{ $labels.namespace }} has no healthy pods"
+            description: "Prometheus can't scrape any app pod. Check `kubectl get pods` and recent events."
+            runbook_url: "https://github.com/whoisch4t/infra-templates#disaster-scenarios"

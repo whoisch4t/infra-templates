@@ -1,0 +1,87 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays: new CVEs show up without any code change
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_VERSION: v0.76.1
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t app:scan app
+      - name: Scan the image (fails on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: app:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Image report for code scanning
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          image-ref: app:scan
+          format: sarif
+          output: trivy-image.sarif
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always() && github.event_name != 'pull_request'
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  repo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Dependencies and secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: IaC misconfigurations (Terraform, Dockerfile, Kubernetes)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: .
+          trivyignores: .trivyignore.yaml
+          severity: MEDIUM,HIGH,CRITICAL
+          exit-code: "1"
+      - name: Render overlays, as they'd reach the cluster
+        run: |
+          mkdir -p rendered
+          for overlay in k8s/overlays/*/; do
+            kubectl kustomize "$overlay" > "rendered/$(basename "$overlay").yaml"
+          done
+      - name: Rendered overlays
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: rendered
+          trivyignores: .trivyignore.yaml
+          severity: MEDIUM,HIGH,CRITICAL
+          exit-code: "1"

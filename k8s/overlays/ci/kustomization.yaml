@@ -1,0 +1,11 @@
+# The dev overlay with the image CI just built and loaded into kind (app:ci).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../dev
+
+images:
+  - name: ghcr.io/whoisch4t/infra-templates-app
+    newName: app
+    newTag: ci

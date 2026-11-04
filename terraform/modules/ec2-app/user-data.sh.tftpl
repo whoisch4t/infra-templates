@@ -1,0 +1,29 @@
+#!/bin/bash
+# Installs Docker and runs the app as a systemd service, so it comes back after a reboot.
+set -euo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+cat > /etc/systemd/system/app.service <<'UNIT'
+[Unit]
+Description=app container
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker rm -f app
+ExecStartPre=/bin/sh -c 'aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}'
+ExecStartPre=/usr/bin/docker pull ${image}
+ExecStart=/usr/bin/docker run --rm --name app --read-only -p 80:${container_port} \
+  --log-driver journald ${image}
+ExecStop=/usr/bin/docker stop -t 30 app
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now app

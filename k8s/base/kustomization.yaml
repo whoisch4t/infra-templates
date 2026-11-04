@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Selectors are written out in each manifest. includeSelectors would also rewrite the
+# NetworkPolicy's from/to selectors (and break DNS egress), so it stays off.
+labels:
+  - pairs:
+      app.kubernetes.io/name: app
+      app.kubernetes.io/part-of: infra-templates
+    includeTemplates: true
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+
+configMapGenerator:
+  - name: app-config
+    literals:
+      - SHUTDOWN_DELAY=5s
+      - FAULTS_ENABLED=false

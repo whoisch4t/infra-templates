@@ -1,0 +1,22 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+tfplan
+plan.json
+plan.txt
+crash.log
+
+# Generated
+rendered/
+monitoring/tests/rules.yaml
+
+# Go
+app/app
+app/app.exe
+
+.idea/
+.vscode/

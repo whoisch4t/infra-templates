@@ -1,0 +1,13 @@
+# Overrides for the throwaway kind cluster in CI: no persistent volume, smaller footprint.
+prometheus:
+  prometheusSpec:
+    retention: 1h
+    storageSpec: {}
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+alertmanager:
+  enabled: false
+grafana:
+  admin:
+    existingSecret: ""
+  adminPassword: ci-only-password

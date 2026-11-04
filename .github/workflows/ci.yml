@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  manifests:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.8.0
+      PROMETHEUS_VERSION: 3.15.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install kubeconform and promtool
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar xz -C /usr/local/bin kubeconform
+          curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | sudo tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: Render and validate every overlay
+        run: |
+          mkdir -p rendered
+          for overlay in k8s/overlays/*/; do
+            name=$(basename "$overlay")
+            kubectl kustomize "$overlay" > "rendered/$name.yaml"
+            kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              "rendered/$name.yaml"
+          done
+      - name: Alert rules (promtool)
+        run: |
+          yq '.spec' k8s/components/monitoring/prometheusrule.yaml > monitoring/tests/rules.yaml
+          promtool check rules monitoring/tests/rules.yaml
+          promtool test rules monitoring/tests/app-rules.test.yaml
+      - name: Dashboard is valid JSON
+        run: jq empty k8s/components/monitoring/app-dashboard.json
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.1
+      - uses: terraform-linters/setup-tflint@v6
+      - run: terraform fmt -check -recursive -diff terraform
+      - name: Validate each root module
+        run: |
+          for dir in terraform/bootstrap terraform/envs/demo; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+      - name: tflint
+        run: |
+          tflint --init --config "$PWD/terraform/.tflint.hcl"
+          tflint --recursive --chdir terraform --config "$PWD/terraform/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # CI only ever plans. This fails the build if a workflow starts changing real infrastructure.
+  plan-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: No workflow applies, destroys or imports
+        run: |
+          # [-] keeps this line from matching itself.
+          if grep -rnE 'terraform[^#]*[[:space:]](apply|destroy|import)([[:space:]]|$)|auto[-]approve' .github/; then
+            echo "Workflows must not change real infrastructure; run those commands by hand." >&2
+            exit 1
+          fi

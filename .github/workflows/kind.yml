@@ -1,0 +1,58 @@
+name: kind
+
+# Deploys the dev overlay to a throwaway kind cluster with Prometheus and Grafana, then smoke tests it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["app/**", "k8s/**", "monitoring/**", "scripts/**", ".github/workflows/kind.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the app image
+        run: docker build --build-arg VERSION="ci-${GITHUB_SHA::7}" -t app:ci app
+
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.33.0
+          cluster_name: infra
+
+      - name: Load the image into kind
+        run: kind load docker-image app:ci --name infra
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1
+
+      - name: Install Prometheus and Grafana (kube-prometheus-stack)
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --version 92.16.1 --namespace monitoring --create-namespace \
+            -f monitoring/values.yaml -f monitoring/values-kind.yaml \
+            --wait --timeout 10m
+
+      - name: Deploy the app
+        run: |
+          kubectl apply -k k8s/overlays/ci
+          kubectl -n app-dev rollout status deployment/app --timeout=120s
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh
+
+      - name: Dump cluster state
+        if: failure()
+        run: |
+          kubectl get all -A
+          kubectl -n app-dev describe pods
+          kubectl -n app-dev logs deployment/app --all-containers --tail=100 || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -50

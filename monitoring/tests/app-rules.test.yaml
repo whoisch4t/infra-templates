@@ -1,0 +1,77 @@
+# promtool unit tests for k8s/components/monitoring/prometheusrule.yaml.
+# CI extracts the rule groups to rules.yaml (yq '.spec' ...) and runs:
+#   promtool test rules monitoring/tests/app-rules.test.yaml
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: error rate above 5% for 5 minutes fires
+    interval: 1m
+    input_series:
+      # 100 requests a minute, 10 of them 500s: a 10% error rate.
+      - series: 'http_requests_total{job="app", namespace="app-prod", route="/", code="200"}'
+        values: "0+90x20"
+      - series: 'http_requests_total{job="app", namespace="app-prod", route="/", code="500"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AppHighErrorRate
+        exp_alerts: [] # still pending
+      - eval_time: 15m
+        alertname: AppHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: app-prod
+            exp_annotations:
+              summary: "app in app-prod is failing 10% of requests"
+              description: "More than 5% of requests return 5xx. Check the last deploy first; roll back if it lines up."
+              runbook_url: "https://github.com/whoisch4t/infra-templates#rollback"
+
+  - name: error rate below the threshold stays quiet
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="app", namespace="app-prod", route="/", code="200"}'
+        values: "0+99x20"
+      - series: 'http_requests_total{job="app", namespace="app-prod", route="/", code="500"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppHighErrorRate
+        exp_alerts: []
+
+  - name: all pods down for 2 minutes fires
+    interval: 1m
+    input_series:
+      - series: 'up{job="app", namespace="app-prod", pod="app-1"}'
+        values: "1 1 0 0 0 0 0"
+      - series: 'up{job="app", namespace="app-prod", pod="app-2"}'
+        values: "1 1 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AppDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AppDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: app-prod
+            exp_annotations:
+              summary: "app in app-prod has no healthy pods"
+              description: "Prometheus can't scrape any app pod. Check `kubectl get pods` and recent events."
+              runbook_url: "https://github.com/whoisch4t/infra-templates#disaster-scenarios"
+
+  - name: one pod down out of two is not an outage
+    interval: 1m
+    input_series:
+      - series: 'up{job="app", namespace="app-prod", pod="app-1"}'
+        values: "1 1 1 1 1 1 1"
+      - series: 'up{job="app", namespace="app-prod", pod="app-2"}'
+        values: "1 1 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AppDown
+        exp_alerts: []
