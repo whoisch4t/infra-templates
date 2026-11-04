@@ -1,6 +1,6 @@
 # infra-templates
 
-How I deploy and watch my services: Kustomize manifests for Kubernetes, Terraform for AWS (ECR plus a single EC2 instance or ECS Fargate), Prometheus and Grafana for monitoring, and CI that deploys to a kind cluster on every change. A small Go service in [`app/`](app) is the thing being deployed.
+The Kubernetes, Terraform and monitoring setup I start from when a side project needs to run somewhere. It's sized for one person and a near-zero bill: one t3.micro or the smallest Fargate task, no NAT, no load balancer, no EKS. A small Go service in [`app/`](app) stands in for the real one.
 
 [![CI](https://github.com/whoisch4t/infra-templates/actions/workflows/ci.yml/badge.svg)](https://github.com/whoisch4t/infra-templates/actions/workflows/ci.yml)
 [![kind](https://github.com/whoisch4t/infra-templates/actions/workflows/kind.yml/badge.svg)](https://github.com/whoisch4t/infra-templates/actions/workflows/kind.yml)
@@ -24,7 +24,7 @@ scripts/smoke-test.sh      what CI runs against the kind cluster
 
 ## Kubernetes
 
-The base is safe by default; the overlays only change sizes:
+Security settings live in the base, so an overlay can't forget them. Overlays only change sizes:
 
 |                     | base                                    | dev                     | prod                                   |
 | ------------------- | --------------------------------------- | ----------------------- | -------------------------------------- |
@@ -153,7 +153,7 @@ AWS has two free-tier models:
 | Budget alert (first two budgets)       | free                           | $0                  | $0               |
 | Data out, < 100 GB                     | free                           | $0                  | $0               |
 
-Things deliberately left out because they'd dominate the bill:
+What I left out, because any one of these would cost more than the rest of the setup:
 
 - NAT gateway: ≈ $32.85/month plus data.
 - Application Load Balancer: ≈ $16.43/month plus LCUs.
@@ -186,7 +186,7 @@ kubectl -n app-prod rollout undo deployment/app              # or --to-revision=
 kubectl -n app-prod rollout status deployment/app
 ```
 
-`rollout undo` brings back the old pod template, including its hashed ConfigMap name. Apply without `--prune` so old ConfigMaps stay around for this. CI runs this drill on every change.
+`rollout undo` brings back the old pod template, including its hashed ConfigMap name. Apply without `--prune` so old ConfigMaps stay around for this. The kind workflow runs this drill on every change.
 
 **ECS Fargate.**
 
@@ -214,12 +214,14 @@ The app is stateless, so recovering means redeploying from git and the registry.
 | Bad release                           | `AppHighErrorRate`, `AppDown`, failed rollout | [Rollback](#rollback). `maxUnavailable: 0` keeps the old pods serving while new ones fail.                  | minutes / none          |
 | A node dies                           | Pods rescheduled, `KubeNodeNotReady`          | Nothing to do. Prod runs 3+ replicas spread over nodes and zones; the PDB limits voluntary evictions.       | seconds / none          |
 | The whole cluster is gone             | Everything is down, `Watchdog` stops firing   | New cluster, then the Helm install from [Monitoring](#monitoring), then `kubectl apply -k k8s/overlays/prod`. Prometheus history is lost (7 days); add remote write if that matters. | ~30 min / metrics only |
-| AWS region outage                     | AWS Health, nothing reachable                 | Push the image to ECR in another region, `terraform apply -var region=<other>` with a new state key. ECR cross-region replication would cut this but adds cost. | ~1 h / none   |
 | State file corrupted or deleted       | `terraform plan` errors or wants to recreate everything | Restore an older S3 version (above). The bucket itself has `prevent_destroy`.                    | minutes / last write    |
-| Image deleted from ECR                | Pods or tasks fail with image pull errors     | Rebuild from the git tag (`docker build --build-arg VERSION=<tag> app`) and push. Running pods keep working meanwhile. | ~15 min / none |
-| Leaked AWS credentials                | CloudTrail, the budget alert                  | CI has no long-lived keys (OIDC, read-only). For a leaked user key: deactivate it, review CloudTrail, rotate. | – |
-| Leaked Grafana password               | –                                             | Recreate the `grafana-admin` secret and restart Grafana.                                                    | minutes                 |
 | Unexpected bill                       | Budget alert at 80% actual, or 100% forecasted | Find the item in Cost Explorer, `terraform destroy` in `envs/demo`, then compare with the cost table.       | –                       |
+
+A deleted ECR image or a region outage come down to the same steps: rebuild the image from its git tag (`docker build --build-arg VERSION=<tag> app`), push it, and `terraform apply` (for another region, with a new state key). For leaked credentials there's less to leak than usual: CI has no long-lived AWS keys, and its plan role is read-only and assumed through OIDC. A leaked user key gets deactivated, then check CloudTrail.
+
+## Status
+
+Checked on my machine: Go tests, `kubeconform -strict` on every overlay, the promtool rule tests, `helm template`, `terraform validate`, tflint and Trivy. Not run yet: the kind workflow (smoke test and rollback drill), the Docker build and a real `terraform plan`, because I don't have Docker or AWS credentials locally. Those run in GitHub Actions.
 
 ## Running checks locally
 
